@@ -10,7 +10,7 @@ st.set_page_config(page_title="SecOps GraphCopilot", layout="wide")
 st.title("🛡️ SecOps GraphCopilot: Attack Path & Continuous Defense")
 
 # Webhook URL dari n8n Cloud
-N8N_WEBHOOK_URL = "https://eternaspacelab.app.n8n.cloud/webhook-test/secops-analyze"
+N8N_WEBHOOK_URL = "https://eternaspacelab.app.n8n.cloud/webhook/secops-analyze"
 
 # Sidebar Input
 with st.sidebar:
