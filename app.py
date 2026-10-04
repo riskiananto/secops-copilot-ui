@@ -20,43 +20,86 @@ with st.sidebar:
 
 def render_graph(graph_data):
     # Buat instance network
-    net = Network(height="500px", width="100%", bgcolor="#1E1E1E", font_color="white", directed=True)
+    net = Network(height="550px", width="100%", bgcolor="#0F172A", font_color="white", directed=True)
     
-    # Pengaturan Physics agar node saling menjauh & label tidak bertumpuk
-    net.barnes_hut(
-        gravity=-8000,           # Gaya tolak antar-node (makin minus, makin renggang)
-        central_gravity=0.3,     # Menarik graf ke tengah canvas
-        spring_length=250,       # Panjang garis/panah penghubung
-        spring_strength=0.05,    # Kelenturan garis
-        damping=0.09
-    )
+    # Konfigurasi visual SOC Dashboard (Hierarchical Layout & Text Badge Background)
+    options = {
+        "nodes": {
+            "borderWidth": 2,
+            "borderWidthSelected": 4,
+            "shadow": True,
+            "font": {
+                "size": 13,
+                "face": "monospace",
+                "color": "#F8FAFC",
+                "background": "#1E293B",  # Box latar belakang teks node
+                "strokeWidth": 2,
+                "strokeColor": "#0F172A"
+            }
+        },
+        "edges": {
+            "color": {"color": "#F59E0B", "highlight": "#EF4444"},
+            "arrows": {"to": {"enabled": True, "scaleFactor": 0.8}},
+            "font": {
+                "size": 11,
+                "face": "sans-serif",
+                "color": "#38BDF8",       # Warna teks cyan yang terang
+                "background": "#1E293B",  # Mencegah teks bertabrakan dengan garis panah!
+                "strokeWidth": 0,
+                "align": "horizontal"
+            },
+            "smooth": {"type": "cubicBezier", "roundness": 0.2}
+        },
+        "layout": {
+            "hierarchical": {
+                "enabled": True,
+                "direction": "LR",        # LR = Left-to-Right (Alur Kill Chain Kronologis)
+                "sortMethod": "directed",
+                "nodeSpacing": 180,
+                "levelSeparation": 220
+            }
+        },
+        "physics": {
+            "hierarchicalRepulsion": {
+                "centralGravity": 0.0,
+                "springLength": 120,
+                "nodeDistance": 180,
+                "damping": 0.09
+            },
+            "solver": "hierarchicalRepulsion"
+        }
+    }
     
-    # Tambahkan Nodes dengan ukuran font & jarak yang lebih jelas
+    # Apply konfigurasi JSON ke Pyvis
+    net.set_options(json.dumps(options))
+    
+    # Render Nodes
     for node in graph_data["nodes"]:
+        node_color = node.get("color", "#3B82F6")
         net.add_node(
             node["id"], 
             label=node["label"], 
-            color=node.get("color", "#97C2FC"),
-            size=25,
-            font={"size": 14, "color": "white"}
+            color={
+                "background": node_color,
+                "border": "#FFFFFF",
+                "highlight": {"background": node_color, "border": "#F59E0B"}
+            },
+            size=24,
+            shape="ellipse"
         )
         
-    # Tambahkan Edges (Panah Pergerakan Serangan)
+    # Render Edges
     for edge in graph_data["edges"]:
         net.add_edge(
             edge["from"], 
             edge["to"], 
-            title=edge["label"], 
-            label=edge["label"],
-            color="#FFD700",      # Warna garis kuning emas agar kontras
-            arrows="to",
-            font={"size": 12, "align": "top", "color": "#00FFFF"} # Warna label garis cyan
+            label=f" {edge['label']} "  # Spasi padding agar teks tidak terlalu mepet
         )
     
     net.save_graph("graph.html")
     with open("graph.html", "r", encoding="utf-8") as f:
         html = f.read()
-    components.html(html, height=520)
+    components.html(html, height=570)
 
 if analyze_btn and uploaded_file is not None:
     logs_data = json.load(uploaded_file)
