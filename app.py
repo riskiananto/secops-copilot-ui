@@ -19,16 +19,44 @@ with st.sidebar:
     analyze_btn = st.button("Analyze & Map Incident", type="primary")
 
 def render_graph(graph_data):
-    net = Network(height="400px", width="100%", bgcolor="#1E1E1E", font_color="white", directed=True)
+    # Buat instance network
+    net = Network(height="500px", width="100%", bgcolor="#1E1E1E", font_color="white", directed=True)
+    
+    # Pengaturan Physics agar node saling menjauh & label tidak bertumpuk
+    net.barnes_hut(
+        gravity=-8000,           # Gaya tolak antar-node (makin minus, makin renggang)
+        central_gravity=0.3,     # Menarik graf ke tengah canvas
+        spring_length=250,       # Panjang garis/panah penghubung
+        spring_strength=0.05,    # Kelenturan garis
+        damping=0.09
+    )
+    
+    # Tambahkan Nodes dengan ukuran font & jarak yang lebih jelas
     for node in graph_data["nodes"]:
-        net.add_node(node["id"], label=node["label"], color=node.get("color", "#97C2FC"))
+        net.add_node(
+            node["id"], 
+            label=node["label"], 
+            color=node.get("color", "#97C2FC"),
+            size=25,
+            font={"size": 14, "color": "white"}
+        )
+        
+    # Tambahkan Edges (Panah Pergerakan Serangan)
     for edge in graph_data["edges"]:
-        net.add_edge(edge["from"], edge["to"], title=edge["label"], label=edge["label"])
+        net.add_edge(
+            edge["from"], 
+            edge["to"], 
+            title=edge["label"], 
+            label=edge["label"],
+            color="#FFD700",      # Warna garis kuning emas agar kontras
+            arrows="to",
+            font={"size": 12, "align": "top", "color": "#00FFFF"} # Warna label garis cyan
+        )
     
     net.save_graph("graph.html")
     with open("graph.html", "r", encoding="utf-8") as f:
         html = f.read()
-    components.html(html, height=420)
+    components.html(html, height=520)
 
 if analyze_btn and uploaded_file is not None:
     logs_data = json.load(uploaded_file)
