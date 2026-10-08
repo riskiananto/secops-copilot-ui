@@ -92,7 +92,6 @@ def render_mermaid(graph_data):
             if not raw_from or not raw_to:
                 continue
 
-            # Auto-create node jika sumber/tujuan belum terdaftar di id_map
             if raw_from not in id_map:
                 new_id = f"N{len(id_map)}"
                 id_map[raw_from] = new_id
@@ -106,8 +105,9 @@ def render_mermaid(graph_data):
             from_id = id_map[raw_from]
             to_id = id_map[raw_to]
 
+            # SINTAKS MERMAID BERLABEL YANG VALID: A -->|"label"| B
             if label:
-                mermaid_lines.append(f'    {from_id} -- "{label}" --> {to_id}')
+                mermaid_lines.append(f'    {from_id} -->|"{label}"| {to_id}')
             else:
                 mermaid_lines.append(f'    {from_id} --> {to_id}')
 
