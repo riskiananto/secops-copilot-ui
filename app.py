@@ -1,143 +1,271 @@
-import streamlit as st
-import requests
 import json
-from pyvis.network import Network
+import datetime
+import requests
+import pandas as pd
+import streamlit as st
 import streamlit.components.v1 as components
 
-# Config Halaman
-st.set_page_config(page_title="SecOps GraphCopilot", layout="wide")
+# 1. Konfigurasi Halaman
+st.set_page_config(
+    page_title="SecOps AI Copilot - Incident Dashboard",
+    page_icon="🛡️",
+    layout="wide"
+)
 
-st.title("🛡️ SecOps GraphCopilot: Attack Path & Continuous Defense")
+# 2. Inisialisasi Session State
+if "incidents_db" not in st.session_state:
+    st.session_state["incidents_db"] = []
 
-# Webhook URL dari n8n Cloud
-N8N_WEBHOOK_URL = "https://eternaspacelab.app.n8n.cloud/webhook/secops-analyze"
+if "selected_incident_id" not in st.session_state:
+    st.session_state["selected_incident_id"] = None
 
-# Sidebar Input
-with st.sidebar:
-    st.header("1. Ingestion Layer")
-    uploaded_file = st.file_uploader("Upload Multi-Host Log (JSON)", type=["json"])
-    analyze_btn = st.button("Analyze & Map Incident", type="primary")
-
-def render_graph(graph_data):
-    # Buat instance network
-    net = Network(height="550px", width="100%", bgcolor="#0F172A", font_color="white", directed=True)
+# Helper: Render Graph Mermaid
+def render_mermaid(graph_data: dict):
+    nodes = graph_data.get("nodes", [])
+    edges = graph_data.get("edges", [])
     
-    # Konfigurasi visual SOC Dashboard (Hierarchical Layout & Text Badge Background)
-    options = {
-        "nodes": {
-            "borderWidth": 2,
-            "borderWidthSelected": 4,
-            "shadow": True,
-            "font": {
-                "size": 13,
-                "face": "monospace",
-                "color": "#F8FAFC",
-                "background": "#1E293B",  # Box latar belakang teks node
-                "strokeWidth": 2,
-                "strokeColor": "#0F172A"
-            }
-        },
-        "edges": {
-            "color": {"color": "#F59E0B", "highlight": "#EF4444"},
-            "arrows": {"to": {"enabled": True, "scaleFactor": 0.8}},
-            "font": {
-                "size": 11,
-                "face": "sans-serif",
-                "color": "#38BDF8",       # Warna teks cyan yang terang
-                "background": "#1E293B",  # Mencegah teks bertabrakan dengan garis panah!
-                "strokeWidth": 0,
-                "align": "horizontal"
-            },
-            "smooth": {"type": "cubicBezier", "roundness": 0.2}
-        },
-        "layout": {
-            "hierarchical": {
-                "enabled": True,
-                "direction": "LR",        # LR = Left-to-Right (Alur Kill Chain Kronologis)
-                "sortMethod": "directed",
-                "nodeSpacing": 180,
-                "levelSeparation": 220
-            }
-        },
-        "physics": {
-            "hierarchicalRepulsion": {
-                "centralGravity": 0.0,
-                "springLength": 120,
-                "nodeDistance": 180,
-                "damping": 0.09
-            },
-            "solver": "hierarchicalRepulsion"
-        }
-    }
+    mermaid_lines = ["graph TD"]
     
-    # Apply konfigurasi JSON ke Pyvis
-    net.set_options(json.dumps(options))
-    
-    # Render Nodes
-    for node in graph_data["nodes"]:
-        node_color = node.get("color", "#3B82F6")
-        net.add_node(
-            node["id"], 
-            label=node["label"], 
-            color={
-                "background": node_color,
-                "border": "#FFFFFF",
-                "highlight": {"background": node_color, "border": "#F59E0B"}
-            },
-            size=24,
-            shape="ellipse"
-        )
+    for idx, node in enumerate(nodes):
+        node_id = str(node.get("id", f"node_{idx}")).replace("-", "_").replace(" ", "_")
+        label = str(node.get("label", node_id)).replace('"', "'")
+        color = node.get("color", "#1E88E5")
         
-    # Render Edges
-    for edge in graph_data["edges"]:
-        net.add_edge(
-            edge["from"], 
-            edge["to"], 
-            label=f" {edge['label']} "  # Spasi padding agar teks tidak terlalu mepet
+        mermaid_lines.append(f'    {node_id}["{label}"]')
+        mermaid_lines.append(f'    style {node_id} fill:{color},stroke:#333,stroke-width:2px,color:#fff')
+
+    for edge in edges:
+        from_id = str(edge.get("from", "")).replace("-", "_").replace(" ", "_")
+        to_id = str(edge.get("to", "")).replace("-", "_").replace(" ", "_")
+        label = str(edge.get("label", "")).replace('"', "'")
+        if from_id and to_id:
+            if label:
+                mermaid_lines.append(f'    {from_id} -- "{label}" --> {to_id}')
+            else:
+                mermaid_lines.append(f'    {from_id} --> {to_id}')
+                
+    mermaid_code = "\n".join(mermaid_lines)
+    
+    html_content = f"""
+    <div style="background-color: #0E1117; padding: 15px; border-radius: 8px;">
+        <pre class="mermaid">
+{mermaid_code}
+        </pre>
+    </div>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});
+    </script>
+    """
+    components.html(html_content, height=500, scrolling=True)
+
+# ---------------------------------------------------------
+# SIDEBAR: Pengiriman Log Baru & Konfigurasi
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("⚙️ Ingestion & Config")
+    n8n_url = st.text_input(
+        "n8n Webhook URL",
+        value="http://localhost:5678/webhook/secops-analyze"
+    )
+    
+    st.divider()
+    st.subheader("📥 Analisis Log Baru")
+    uploaded_file = st.file_uploader(
+        "Unggah Log (.json, .log, .txt)",
+        type=["json", "log", "txt"]
+    )
+    
+    if uploaded_file is not None:
+        if st.button("🚀 Process & Append Incident", type="primary", use_container_width=True):
+            raw_content = uploaded_file.read().decode("utf-8", errors="ignore")
+            with st.spinner("Mengirim ke n8n..."):
+                try:
+                    response = requests.post(
+                        n8n_url,
+                        json={"log_data": raw_content, "file_name": uploaded_file.name},
+                        headers={"Content-Type": "application/json"},
+                        timeout=180
+                    )
+                    if response.status_code == 200:
+                        analysis_result = response.json()
+                        
+                        # Generate ID & Timestamp untuk DB In-Memory
+                        inc_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                        inc_entry = {
+                            "id": inc_id,
+                            "timestamp": datetime.datetime.now(),
+                            "file_name": uploaded_file.name,
+                            "severity": analysis_result.get("summary", {}).get("severity", "MEDIUM").upper(),
+                            "patient_zero": analysis_result.get("summary", {}).get("patient_zero", "Unknown"),
+                            "affected_count": analysis_result.get("summary", {}).get("affected_hosts_count", 0),
+                            "details": analysis_result
+                        }
+                        st.session_state["incidents_db"].insert(0, inc_entry)
+                        st.success(f"Insiden {inc_id} berhasil didaftarkan!")
+                    else:
+                        st.error(f"HTTP Error {response.status_code}: {response.text}")
+                except Exception as e:
+                    st.error(f"Koneksi Gagal: {str(e)}")
+
+# ---------------------------------------------------------
+# MAIN PANEL
+# ---------------------------------------------------------
+st.title("🛡️ SecOps AI Monitoring & Incident Response")
+
+# JIKA MODE DRILL-DOWN AKTIF
+if st.session_state["selected_incident_id"] is not None:
+    # Cari insiden berdasarkan ID
+    selected_inc = next((item for item in st.session_state["incidents_db"] if item["id"] == st.session_state["selected_incident_id"]), None)
+    
+    if selected_inc:
+        col_back, col_title = st.columns([1, 5])
+        with col_back:
+            if st.button("⬅️ Kembali ke Overview", use_container_width=True):
+                st.session_state["selected_incident_id"] = None
+                st.rerun()
+                
+        with col_title:
+            st.subheader(f"🔍 Drill-Down Detail: {selected_inc['id']} ({selected_inc['file_name']})")
+
+        data = selected_inc["details"]
+        
+        tab_summary, tab_graph, tab_timeline, tab_defense = st.tabs([
+            "📊 Executive Summary",
+            "🕸️ Attack Path Graph",
+            "⏱️ Timeline Kejadian",
+            "🛡️ Mitigasi & Deteksi"
+        ])
+        
+        summary = data.get("summary", {})
+        with tab_summary:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Patient Zero", summary.get("patient_zero", "N/A"))
+            c2.metric("Host Terdampak", summary.get("affected_hosts_count", 0))
+            sev = str(summary.get("severity", "UNKNOWN")).upper()
+            color = "🔴" if sev in ["CRITICAL", "HIGH"] else ("🟡" if sev == "MEDIUM" else "🟢")
+            c3.metric("Severity", f"{color} {sev}")
+            c4.metric("Waktu Analisis", selected_inc["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
+            
+            st.markdown("### Narasi Analisis")
+            st.info(summary.get("narrative", "Tidak ada narasi."))
+            
+        with tab_graph:
+            st.markdown("### Rekonstruksi Skema Serangan")
+            graph_data = data.get("graph", {})
+            if graph_data.get("nodes"):
+                render_mermaid(graph_data)
+            else:
+                st.warning("Data grafik tidak tersedia.")
+                
+        with tab_timeline:
+            st.markdown("### Kronologi Kejadian")
+            timeline = data.get("timeline", [])
+            if timeline:
+                st.dataframe(timeline, use_container_width=True)
+            else:
+                st.info("Data timeline kosong.")
+                
+        with tab_defense:
+            defense = data.get("defense", {})
+            col_sig, col_act = st.columns(2)
+            with col_sig:
+                st.markdown("### Sigma Detection Rule")
+                st.code(defense.get("sigma_rule", ""), language="yaml")
+            with col_act:
+                st.markdown("### Atomic Remediation Script")
+                st.code(defense.get("atomic_script", ""), language="bash")
+
+# ---------------------------------------------------------
+# JIKA MODE OVERVIEW DASHBOARD AKTIF
+# ---------------------------------------------------------
+else:
+    st.subheader("📈 Attack Overview & Monitoring Dashboard")
+    
+    # --- Time Range & Severity Filter ---
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+    with col_f1:
+        date_range = st.date_input(
+            "Rentang Waktu Log",
+            value=(datetime.date.today() - datetime.timedelta(days=7), datetime.date.today())
         )
-    
-    net.save_graph("graph.html")
-    with open("graph.html", "r", encoding="utf-8") as f:
-        html = f.read()
-    components.html(html, height=570)
+    with col_f2:
+        selected_severity = st.multiselect(
+            "Filter Severity",
+            options=["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+            default=["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+        )
+    with col_f3:
+        search_query = st.text_input("Cari Host / IP / Patient Zero", value="")
 
-if analyze_btn and uploaded_file is not None:
-    logs_data = json.load(uploaded_file)
+    # Filtering Data
+    filtered_db = []
+    for inc in st.session_state["incidents_db"]:
+        inc_date = inc["timestamp"].date()
+        
+        # Validasi Rentang Tanggal
+        in_date_range = True
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            in_date_range = date_range[0] <= inc_date <= date_range[1]
+            
+        # Validasi Severity & Keyword
+        in_sev = inc["severity"] in selected_severity
+        in_search = (search_query.lower() in inc["patient_zero"].lower()) or (search_query.lower() in inc["id"].lower())
+        
+        if in_date_range and in_sev and in_search:
+            filtered_db.append(inc)
+
+    # --- Section Top Metrics ---
+    m1, m2, m3, m4 = st.columns(4)
+    total_incidents = len(filtered_db)
+    crit_high_count = sum(1 for i in filtered_db if i["severity"] in ["CRITICAL", "HIGH"])
+    total_hosts = sum(i["affected_count"] for i in filtered_db)
+    patient_zeros = len(set(i["patient_zero"] for i in filtered_db if i["patient_zero"] != "Unknown"))
+
+    m1.metric("Total Insiden Terdeteksi", total_incidents)
+    m2.metric("Critical / High Alerts", crit_high_count, delta_color="inverse")
+    m3.metric("Total Host Terdampak", total_hosts)
+    m4.metric("Unique Patient Zeros", patient_zeros)
+
+    st.divider()
+
+    # --- Section Visualisasi Tren ---
+    if filtered_db:
+        st.markdown("### 📊 Tren Frekuensi Serangan")
+        df_chart = pd.DataFrame([
+            {"Timestamp": i["timestamp"], "Severity": i["severity"], "Count": 1}
+            for i in filtered_db
+        ])
+        df_chart.set_index("Timestamp", inplace=True)
+        # Resample harian untuk grafik tren
+        trend_data = df_chart.groupby([pd.Grouper(freq="D"), "Severity"]).count().unstack(fill_value=0)
+        trend_data.columns = trend_data.columns.droplevel(0)
+        st.bar_chart(trend_data)
     
-    with st.spinner("Analyzing log artifacts & extracting attack graph via Cloud Engine..."):
-        try:
-            res = requests.post(N8N_WEBHOOK_URL, json=logs_data)
-            data = res.json()
-            
-            # Key Metrics Header
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Patient Zero", data["summary"]["patient_zero"])
-            m2.metric("Affected Hosts", data["summary"]["affected_hosts_count"])
-            m3.metric("Severity Level", data["summary"]["severity"])
-            m4.metric("Est. MTTR Saved", "90%")
-            
+    st.divider()
+
+    # --- Section Tabel Insiden & Drill-down Trigger ---
+    st.markdown("### 📋 Daftar Insiden Terdeteksi")
+    
+    if not filtered_db:
+        st.info("Belum ada data insiden dalam rentang waktu/filter ini. Unggah log baru via sidebar.")
+    else:
+        # Menampilkan Tabel dengan Tombol Action Drill-Down
+        for idx, inc in enumerate(filtered_db):
+            with st.container():
+                c_id, c_time, c_pz, c_sev, c_host, c_act = st.columns([2, 2, 2, 1.5, 1.5, 2])
+                c_id.write(f"**{inc['id']}**\n\n_{inc['file_name']}_")
+                c_time.write(inc["timestamp"].strftime("%Y-%m-%d %H:%M"))
+                c_pz.write(f"`{inc['patient_zero']}`")
+                
+                # Badge Severity
+                sev_color = "🔴" if inc['severity'] in ["CRITICAL", "HIGH"] else ("🟡" if inc['severity'] == "MEDIUM" else "🟢")
+                c_sev.write(f"{sev_color} {inc['severity']}")
+                
+                c_host.write(f"{inc['affected_count']} Host")
+                
+                # Button Drill-Down
+                if c_act.button("🔎 Inspect Attack Path", key=f"btn_{inc['id']}"):
+                    st.session_state["selected_incident_id"] = inc["id"]
+                    st.rerun()
             st.divider()
-            
-            # Tabs View
-            tab1, tab2, tab3 = st.tabs(["🕸️ Attack Path & Blast Radius", "📝 Incident Narrative", "🛡️ Continuous Defense Engine"])
-            
-            with tab1:
-                st.subheader("Visual Blast Radius & Pergerakan Peretas")
-                render_graph(data["graph"])
-                
-            with tab2:
-                st.subheader("Executive Summary")
-                st.write(data["summary"]["narrative"])
-                st.subheader("Chronological Timeline")
-                st.table(data["timeline"])
-                
-            with tab3:
-                st.subheader("Auto-Generated Sigma Detection Rule")
-                st.code(data["defense"]["sigma_rule"], language="yaml")
-                st.download_button("Download .YML Rule", data["defense"]["sigma_rule"], file_name="sigma_rule.yml")
-                
-                st.subheader("Validation Script (Atomic Red Team)")
-                st.code(data["defense"]["atomic_script"], language="powershell")
-
-        except Exception as e:
-            st.error(f"Gagal memproses data: {str(e)}")
