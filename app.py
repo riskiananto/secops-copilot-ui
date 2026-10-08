@@ -25,10 +25,8 @@ def clean_label_text(text: str) -> str:
     if not text:
         return ""
     s = str(text)
-    # Hapus karakter perusak string & HTML tag
     s = s.replace('"', "'").replace('\\', '/').replace("\n", " ").replace("\r", "")
     s = s.replace('<', '&lt;').replace('>', '&gt;')
-    # Hapus kurung siku/kurawal yang merusak deklarasi shape
     s = re.sub(r'[\[\]\{\}]', '', s)
     return s.strip()
 
@@ -39,7 +37,7 @@ def render_mermaid(graph_data):
 
     mermaid_code = ""
 
-    # KASUS A: Jika LLM mengembalikan String Mermaid Mentah
+    # KASUS A: String Mentah
     if isinstance(graph_data, str):
         mermaid_code = graph_data.strip()
         if mermaid_code.startswith("```"):
@@ -48,7 +46,7 @@ def render_mermaid(graph_data):
         if not mermaid_code.startswith("graph ") and not mermaid_code.startswith("flowchart "):
             mermaid_code = "graph TD\n" + mermaid_code
 
-    # KASUS B: Jika LLM mengembalikan Dict JSON (nodes & edges)
+    # KASUS B: Dict JSON (nodes & edges)
     elif isinstance(graph_data, dict):
         nodes = graph_data.get("nodes", [])
         edges = graph_data.get("edges", [])
@@ -80,7 +78,7 @@ def render_mermaid(graph_data):
             mermaid_lines.append(f'    {clean_id}["{label}"]')
             mermaid_lines.append(f'    style {clean_id} fill:{color},stroke:#333,stroke-width:2px,color:#fff')
 
-        # 2. Proses Edges & Dynamic Node Creation jika ada ID menggantung
+        # 2. Pemetaan Edges dengan Format Valid Mermaid v10: A -->|"label"| B
         for edge in edges:
             if not isinstance(edge, dict):
                 continue
@@ -105,7 +103,6 @@ def render_mermaid(graph_data):
             from_id = id_map[raw_from]
             to_id = id_map[raw_to]
 
-            # SINTAKS MERMAID BERLABEL YANG VALID: A -->|"label"| B
             if label:
                 mermaid_lines.append(f'    {from_id} -->|"{label}"| {to_id}')
             else:
@@ -116,33 +113,26 @@ def render_mermaid(graph_data):
         st.error("Format data grafik tidak dikenali.")
         return
 
-    # Panel Debug untuk memeriksa teks sintaksis mentah
+    # Panel Debug untuk verifikasi sintaks
     with st.expander("🐛 Debug: Lihat Kode Mermaid Mentah"):
         st.code(mermaid_code, language="text")
 
-    # Safe Injection via JSON stringify di JavaScript
-    json_mermaid = json.dumps(mermaid_code)
-
+    # Render HTML menggunakan eksekusi eksplisit mermaid.run()
     html_content = f"""
-    <div id="mermaid-container" style="background-color: #0E1117; padding: 15px; border-radius: 8px; min-height: 200px;">
-        <div id="graph-target"></div>
-        <div id="error-target" style="color: #ff4b4b; font-family: monospace; white-space: pre-wrap;"></div>
+    <div style="background-color: #0E1117; padding: 15px; border-radius: 8px;">
+        <pre class="mermaid" id="mermaid-graph">
+{mermaid_code}
+        </pre>
     </div>
     <script type="module">
         import mermaid from '[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs)';
-
-        const rawCode = {json_mermaid};
-        const target = document.getElementById('graph-target');
-        const errTarget = document.getElementById('error-target');
-
         mermaid.initialize({{ startOnLoad: false, theme: 'dark' }});
-
         try {{
-            const {{ svg }} = await mermaid.render('mermaid_svg_render', rawCode);
-            target.innerHTML = svg;
+            await mermaid.run({{
+                nodes: [document.getElementById('mermaid-graph')]
+            }});
         }} catch (err) {{
             console.error("Mermaid Render Error:", err);
-            errTarget.innerText = "❌ Gagal merender grafik Mermaid:\\n" + err.message;
         }}
     </script>
     """
