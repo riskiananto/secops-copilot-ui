@@ -184,30 +184,211 @@ with st.sidebar:
                         headers={"Content-Type": "application/json"},
                         timeout=180
                     )
+                    # if response.status_code == 200:
+                    #     raw_response = response.json()
+                        
+                    #     # Normalisasi jika respon berupa list dari n8n
+                    #     items_to_process = raw_response if isinstance(raw_response, list) else [raw_response]
+                        
+                    #     for analysis_result in items_to_process:
+                    #         summary = analysis_result.get("summary", {}) if isinstance(analysis_result, dict) else {}
+                    #         analysis_time = datetime.datetime.now(JAKARTA_TZ)
+                    #         inc_id = f"INC-{analysis_time.strftime('%Y%m%d-%H%M%S')}"
+                    #         #inc_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                    #         inc_entry = {
+                    #             "id": inc_id,
+                    #             "timestamp": analysis_time,
+                    #             #"timestamp": datetime.datetime.now(),
+                    #             "file_name": uploaded_file.name,
+                    #             "severity": str(summary.get("severity", "MEDIUM")).upper(),
+                    #             "patient_zero": summary.get("patient_zero", "Unknown"),
+                    #             "affected_count": summary.get("affected_hosts_count", 0),
+                    #             "details": analysis_result
+                    #         }
+                    #         st.session_state["incidents_db"].insert(0, inc_entry)
+                        
+                    #     st.success(f"Berhasil mendaftarkan {len(items_to_process)} insiden!")
                     if response.status_code == 200:
                         raw_response = response.json()
-                        
-                        # Normalisasi jika respon berupa list dari n8n
-                        items_to_process = raw_response if isinstance(raw_response, list) else [raw_response]
-                        
-                        for analysis_result in items_to_process:
-                            summary = analysis_result.get("summary", {}) if isinstance(analysis_result, dict) else {}
+                    
+                        # Aktifkan sementara untuk troubleshooting.
+                        with st.expander("Debug Respons Mentah n8n"):
+                            st.json(raw_response)
+                    
+                        # Normalisasi respons n8n menjadi daftar insiden.
+                        raw_incidents = []
+                    
+                        if isinstance(raw_response, dict):
+                            nested_incidents = raw_response.get("incidents")
+                    
+                            if isinstance(nested_incidents, list):
+                                raw_incidents.extend(nested_incidents)
+                            elif isinstance(raw_response.get("timeline"), list):
+                                raw_incidents.append(raw_response)
+                    
+                        elif isinstance(raw_response, list):
+                            for item in raw_response:
+                                if not isinstance(item, dict):
+                                    continue
+                    
+                                nested_incidents = item.get("incidents")
+                    
+                                if isinstance(nested_incidents, list):
+                                    raw_incidents.extend(nested_incidents)
+                                elif isinstance(item.get("timeline"), list):
+                                    raw_incidents.append(item)
+                    
+                        if not raw_incidents:
+                            st.warning(
+                                "Analisis selesai, tetapi respons n8n tidak berisi "
+                                "daftar insiden yang valid."
+                            )
+                        else:
                             analysis_time = datetime.datetime.now(JAKARTA_TZ)
-                            inc_id = f"INC-{analysis_time.strftime('%Y%m%d-%H%M%S')}"
-                            #inc_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                            inc_entry = {
-                                "id": inc_id,
-                                "timestamp": analysis_time,
-                                #"timestamp": datetime.datetime.now(),
-                                "file_name": uploaded_file.name,
-                                "severity": str(summary.get("severity", "MEDIUM")).upper(),
-                                "patient_zero": summary.get("patient_zero", "Unknown"),
-                                "affected_count": summary.get("affected_hosts_count", 0),
-                                "details": analysis_result
-                            }
-                            st.session_state["incidents_db"].insert(0, inc_entry)
-                        
-                        st.success(f"Berhasil mendaftarkan {len(items_to_process)} insiden!")
+                            saved_count = 0
+                    
+                            for index, incident in enumerate(raw_incidents, start=1):
+                                if not isinstance(incident, dict):
+                                    continue
+                    
+                                timeline = incident.get("timeline", [])
+                    
+                                if not isinstance(timeline, list) or not timeline:
+                                    continue
+                    
+                                valid_timeline = [
+                                    event
+                                    for event in timeline
+                                    if isinstance(event, dict) and event.get("timestamp")
+                                ]
+                    
+                                if not valid_timeline:
+                                    continue
+                    
+                                valid_timeline.sort(
+                                    key=lambda event: str(event.get("timestamp", ""))
+                                )
+                    
+                                declared_hosts = incident.get("affected_hosts", [])
+                    
+                                if not isinstance(declared_hosts, list):
+                                    declared_hosts = []
+                    
+                                timeline_hosts = []
+                    
+                                for event in valid_timeline:
+                                    hostname = event.get("hostname") or event.get("host")
+                    
+                                    if hostname and hostname not in timeline_hosts:
+                                        timeline_hosts.append(hostname)
+                    
+                                affected_hosts = list(
+                                    dict.fromkeys(declared_hosts + timeline_hosts)
+                                )
+                    
+                                patient_zero = incident.get("patient_zero")
+                    
+                                if (
+                                    not patient_zero
+                                    or patient_zero == "Unknown"
+                                    or patient_zero not in affected_hosts
+                                ):
+                                    patient_zero = (
+                                        valid_timeline[0].get("hostname")
+                                        or valid_timeline[0].get("host")
+                                        or "Unknown"
+                                    )
+                    
+                                severity = str(
+                                    incident.get(
+                                        "severity",
+                                        valid_timeline[0].get("severity", "MEDIUM")
+                                    )
+                                ).upper()
+                    
+                                if severity not in {"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"}:
+                                    severity = "MEDIUM"
+                    
+                                workflow_incident_id = incident.get("incident_id")
+                    
+                                if workflow_incident_id:
+                                    inc_id = (
+                                        f"{workflow_incident_id}-"
+                                        f"{analysis_time.strftime('%Y%m%d%H%M%S')}"
+                                    )
+                                else:
+                                    inc_id = (
+                                        f"INC-{analysis_time.strftime('%Y%m%d-%H%M%S')}-"
+                                        f"{index:03d}"
+                                    )
+                    
+                                incident_summary = {
+                                    "title": incident.get("title", "Security Incident"),
+                                    "severity": severity,
+                                    "patient_zero": patient_zero,
+                                    "affected_hosts_count": len(affected_hosts),
+                                    "narrative": incident.get(
+                                        "summary",
+                                        incident.get("narrative", "Tidak ada narasi.")
+                                    ),
+                                    "classification": incident.get(
+                                        "classification",
+                                        "UNKNOWN"
+                                    ),
+                                    "confidence": incident.get("confidence", 0)
+                                }
+                    
+                                normalized_details = {
+                                    "incident_id": inc_id,
+                                    "incident_key": incident.get("incident_key"),
+                                    "source_group": incident.get(
+                                        "source_group",
+                                        incident.get("source_batch")
+                                    ),
+                                    "summary": incident_summary,
+                                    "timeline": valid_timeline,
+                                    "graph": incident.get(
+                                        "graph",
+                                        {"nodes": [], "edges": []}
+                                    ),
+                                    "defense": {
+                                        "sigma_rule": incident.get(
+                                            "sigma_rule",
+                                            "# No rule generated"
+                                        ),
+                                        "atomic_script": incident.get(
+                                            "atomic_script",
+                                            "# No script generated"
+                                        ),
+                                        "mitigation": incident.get("mitigation", []),
+                                        "detection": incident.get("detection", [])
+                                    },
+                                    "affected_hosts": affected_hosts,
+                                    "parser_metadata": incident.get("parser_metadata", {})
+                                }
+                    
+                                inc_entry = {
+                                    "id": inc_id,
+                                    "timestamp": analysis_time,
+                                    "file_name": uploaded_file.name,
+                                    "severity": severity,
+                                    "patient_zero": patient_zero,
+                                    "affected_count": len(affected_hosts),
+                                    "details": normalized_details
+                                }
+                    
+                                st.session_state["incidents_db"].insert(0, inc_entry)
+                                saved_count += 1
+                    
+                            if saved_count > 0:
+                                st.success(
+                                    f"Berhasil mendaftarkan {saved_count} insiden."
+                                )
+                            else:
+                                st.warning(
+                                    "Respons n8n diterima, tetapi tidak ada insiden "
+                                    "dengan timeline valid."
+                                )
                     else:
                         st.error(f"HTTP Error {response.status_code}: {response.text}")
                 except Exception as e:
