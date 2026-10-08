@@ -125,7 +125,7 @@ def render_mermaid(graph_data):
         <div id="error-target" style="color: #ff4b4b; font-family: monospace; white-space: pre-wrap;"></div>
     </div>
     <script type="module">
-        import mermaid from '[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs)';
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
 
         const rawCode = {json_mermaid};
         const target = document.getElementById('graph-target');
