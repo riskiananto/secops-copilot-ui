@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+import re
 
 # 1. Konfigurasi Halaman
 st.set_page_config(
@@ -19,26 +20,53 @@ if "incidents_db" not in st.session_state:
 if "selected_incident_id" not in st.session_state:
     st.session_state["selected_incident_id"] = None
 
-# Helper: Render Graph Mermaid
+# 3. Fungsi Sanitasi & Render Mermaid (PERBARUI BAGIAN INI)
+def sanitize_mermaid_id(raw_id: str) -> str:
+    clean = re.sub(r'[^a-zA-Z0-9_]', '_', str(raw_id))
+    if clean and clean[0].isdigit():
+        clean = f"node_{clean}"
+    return clean or "node_unk"
+
+def sanitize_mermaid_label(raw_label: str) -> str:
+    if not raw_label:
+        return ""
+    clean = str(raw_label).replace('"', "'").replace("\n", " ").replace("\r", "")
+    clean = re.sub(r'[\[\]\{\}\(\)]', '', clean)
+    return clean.strip()
+
 def render_mermaid(graph_data: dict):
     nodes = graph_data.get("nodes", [])
     edges = graph_data.get("edges", [])
     
+    if not nodes:
+        st.warning("Data node grafik kosong.")
+        return
+
     mermaid_lines = ["graph TD"]
+    id_map = {}
     
     for idx, node in enumerate(nodes):
-        node_id = str(node.get("id", f"node_{idx}")).replace("-", "_").replace(" ", "_")
-        label = str(node.get("label", node_id)).replace('"', "'")
-        color = node.get("color", "#1E88E5")
+        raw_id = str(node.get("id", f"node_{idx}"))
+        clean_id = sanitize_mermaid_id(raw_id)
+        id_map[raw_id] = clean_id
         
-        mermaid_lines.append(f'    {node_id}["{label}"]')
-        mermaid_lines.append(f'    style {node_id} fill:{color},stroke:#333,stroke-width:2px,color:#fff')
+        label = sanitize_mermaid_label(node.get("label", raw_id))
+        color = str(node.get("color", "#1E88E5")).strip()
+        if not color.startswith("#"):
+            color = "#1E88E5"
+            
+        mermaid_lines.append(f'    {clean_id}["{label}"]')
+        mermaid_lines.append(f'    style {clean_id} fill:{color},stroke:#333,stroke-width:2px,color:#fff')
 
     for edge in edges:
-        from_id = str(edge.get("from", "")).replace("-", "_").replace(" ", "_")
-        to_id = str(edge.get("to", "")).replace("-", "_").replace(" ", "_")
-        label = str(edge.get("label", "")).replace('"', "'")
-        if from_id and to_id:
+        raw_from = str(edge.get("from", ""))
+        raw_to = str(edge.get("to", ""))
+        
+        from_id = id_map.get(raw_from, sanitize_mermaid_id(raw_from))
+        to_id = id_map.get(raw_to, sanitize_mermaid_id(raw_to))
+        label = sanitize_mermaid_label(edge.get("label", ""))
+        
+        if from_id and to_id and from_id != "node_unk" and to_id != "node_unk":
             if label:
                 mermaid_lines.append(f'    {from_id} -- "{label}" --> {to_id}')
             else:
