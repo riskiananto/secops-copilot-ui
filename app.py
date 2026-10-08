@@ -155,9 +155,17 @@ with st.sidebar:
     st.header("⚙️ Ingestion & Config")
     n8n_url = st.text_input(
         "n8n Webhook URL",
-        value="http://localhost:5678/webhook/secops-analyze"
+        value="https://eternaspacelab.app.n8n.cloud/webhook/secops-analyze"
     )
-    
+    # Reset database insiden di session Streamlit
+    if st.button(
+        "🗑️ Reset Incident Database",
+        use_container_width=True
+    ):
+        st.session_state["incidents_db"] = []
+        st.session_state["selected_incident_id"] = None
+        st.success("Database insiden pada sesi ini berhasil direset.")
+        st.rerun()
     st.divider()
     st.subheader("📥 Analisis Log Baru")
     uploaded_file = st.file_uploader(
