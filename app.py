@@ -20,21 +20,17 @@ if "incidents_db" not in st.session_state:
 if "selected_incident_id" not in st.session_state:
     st.session_state["selected_incident_id"] = None
 
-# 3. Fungsi Sanitasi & Render Mermaid (PERBARUI BAGIAN INI)
-def sanitize_mermaid_id(raw_id: str) -> str:
-    clean = re.sub(r'[^a-zA-Z0-9_]', '_', str(raw_id))
-    if clean and clean[0].isdigit():
-        clean = f"node_{clean}"
-    return clean or "node_unk"
-
-def sanitize_mermaid_label(raw_label: str) -> str:
-    if not raw_label:
+def clean_label_text(text: str) -> str:
+    """Membersihkan teks label agar 100% aman disisipkan ke sintaks Mermaid."""
+    if not text:
         return ""
-    clean = str(raw_label)
-    # Hapus backslash, double quotes, dan newline yang merusak sintaks Mermaid
-    clean = clean.replace('\\', '/').replace('"', "'").replace("\n", " ").replace("\r", "")
-    clean = re.sub(r'[\[\]\{\}\(\)]', '', clean)
-    return clean.strip()
+    s = str(text)
+    # Hapus karakter perusak string & HTML tag
+    s = s.replace('"', "'").replace('\\', '/').replace("\n", " ").replace("\r", "")
+    s = s.replace('<', '&lt;').replace('>', '&gt;')
+    # Hapus kurung siku/kurawal yang merusak deklarasi shape
+    s = re.sub(r'[\[\]\{\}]', '', s)
+    return s.strip()
 
 def render_mermaid(graph_data):
     if not graph_data:
@@ -43,79 +39,114 @@ def render_mermaid(graph_data):
 
     mermaid_code = ""
 
-    # HANDLING KASUS A: LLM mengembalikan graph sebagai String Mentah (e.g. "graph TD\n...")
+    # KASUS A: Jika LLM mengembalikan String Mermaid Mentah
     if isinstance(graph_data, str):
-        raw_str = graph_data.strip()
-        raw_str = re.sub(r'^```(mermaid)?\s*', '', raw_str, flags=re.IGNORECASE)
-        raw_str = re.sub(r'\s*```$', '', raw_str)
-        
-        if not raw_str.startswith("graph "):
-            raw_str = "graph TD\n" + raw_str
-        mermaid_code = raw_str
+        mermaid_code = graph_data.strip()
+        if mermaid_code.startswith("```"):
+            mermaid_code = re.sub(r'^```(mermaid)?\s*', '', mermaid_code, flags=re.IGNORECASE)
+            mermaid_code = re.sub(r'\s*```$', '', mermaid_code)
+        if not mermaid_code.startswith("graph ") and not mermaid_code.startswith("flowchart "):
+            mermaid_code = "graph TD\n" + mermaid_code
 
-    # HANDLING KASUS B: LLM mengembalikan JSON Object (nodes & edges)
+    # KASUS B: Jika LLM mengembalikan Dict JSON (nodes & edges)
     elif isinstance(graph_data, dict):
         nodes = graph_data.get("nodes", [])
         edges = graph_data.get("edges", [])
 
         if not nodes and not edges:
-            st.warning("Data nodes dan edges pada grafik kosong.")
+            st.warning("Nodes dan edges pada grafik kosong.")
             return
 
         mermaid_lines = ["graph TD"]
         id_map = {}
 
+        # 1. Pemetaan ID Steril (N0, N1, N2, ...)
         for idx, node in enumerate(nodes):
             if isinstance(node, dict):
                 raw_id = str(node.get("id", f"node_{idx}"))
-                label = sanitize_mermaid_label(node.get("label", raw_id))
+                label = clean_label_text(node.get("label", raw_id))
                 color = str(node.get("color", "#1E88E5")).strip()
             else:
                 raw_id = str(node)
-                label = sanitize_mermaid_label(raw_id)
+                label = clean_label_text(raw_id)
                 color = "#1E88E5"
 
-            clean_id = sanitize_mermaid_id(raw_id)
+            clean_id = f"N{idx}"
             id_map[raw_id] = clean_id
 
-            if not color.startswith("#"):
+            if not color.startswith("#") or len(color) not in [4, 7]:
                 color = "#1E88E5"
 
             mermaid_lines.append(f'    {clean_id}["{label}"]')
             mermaid_lines.append(f'    style {clean_id} fill:{color},stroke:#333,stroke-width:2px,color:#fff')
 
+        # 2. Proses Edges & Dynamic Node Creation jika ada ID menggantung
         for edge in edges:
-            if isinstance(edge, dict):
-                raw_from = str(edge.get("from", ""))
-                raw_to = str(edge.get("to", ""))
-                label = sanitize_mermaid_label(edge.get("label", ""))
-            else:
+            if not isinstance(edge, dict):
                 continue
 
-            from_id = id_map.get(raw_from, sanitize_mermaid_id(raw_from))
-            to_id = id_map.get(raw_to, sanitize_mermaid_id(raw_to))
+            raw_from = str(edge.get("from", ""))
+            raw_to = str(edge.get("to", ""))
+            label = clean_label_text(edge.get("label", ""))
 
-            if from_id and to_id and from_id != "node_unk" and to_id != "node_unk":
-                if label:
-                    mermaid_lines.append(f'    {from_id} -- "{label}" --> {to_id}')
-                else:
-                    mermaid_lines.append(f'    {from_id} --> {to_id}')
+            if not raw_from or not raw_to:
+                continue
+
+            # Auto-create node jika sumber/tujuan belum terdaftar di id_map
+            if raw_from not in id_map:
+                new_id = f"N{len(id_map)}"
+                id_map[raw_from] = new_id
+                mermaid_lines.append(f'    {new_id}["{clean_label_text(raw_from)}"]')
+
+            if raw_to not in id_map:
+                new_id = f"N{len(id_map)}"
+                id_map[raw_to] = new_id
+                mermaid_lines.append(f'    {new_id}["{clean_label_text(raw_to)}"]')
+
+            from_id = id_map[raw_from]
+            to_id = id_map[raw_to]
+
+            if label:
+                mermaid_lines.append(f'    {from_id} -- "{label}" --> {to_id}')
+            else:
+                mermaid_lines.append(f'    {from_id} --> {to_id}')
 
         mermaid_code = "\n".join(mermaid_lines)
+    else:
+        st.error("Format data grafik tidak dikenali.")
+        return
 
-    # Render HTML Component
+    # Panel Debug untuk memeriksa teks sintaksis mentah
+    with st.expander("🐛 Debug: Lihat Kode Mermaid Mentah"):
+        st.code(mermaid_code, language="text")
+
+    # Safe Injection via JSON stringify di JavaScript
+    json_mermaid = json.dumps(mermaid_code)
+
     html_content = f"""
-    <div style="background-color: #0E1117; padding: 15px; border-radius: 8px;">
-        <pre class="mermaid">
-{mermaid_code}
-        </pre>
+    <div id="mermaid-container" style="background-color: #0E1117; padding: 15px; border-radius: 8px; min-height: 200px;">
+        <div id="graph-target"></div>
+        <div id="error-target" style="color: #ff4b4b; font-family: monospace; white-space: pre-wrap;"></div>
     </div>
     <script type="module">
-        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-        mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});
+        import mermaid from '[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs)';
+
+        const rawCode = {json_mermaid};
+        const target = document.getElementById('graph-target');
+        const errTarget = document.getElementById('error-target');
+
+        mermaid.initialize({{ startOnLoad: false, theme: 'dark' }});
+
+        try {{
+            const {{ svg }} = await mermaid.render('mermaid_svg_render', rawCode);
+            target.innerHTML = svg;
+        }} catch (err) {{
+            console.error("Mermaid Render Error:", err);
+            errTarget.innerText = "❌ Gagal merender grafik Mermaid:\\n" + err.message;
+        }}
     </script>
     """
-    components.html(html_content, height=500, scrolling=True)
+    components.html(html_content, height=550, scrolling=True)
 
 # ---------------------------------------------------------
 # SIDEBAR: Pengiriman Log Baru & Konfigurasi
