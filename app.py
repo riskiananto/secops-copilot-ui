@@ -26,7 +26,7 @@ def clean_label_text(text: str) -> str:
         return ""
     s = str(text)
     s = s.replace('"', "'").replace('\\', '/').replace("\n", " ").replace("\r", "")
-    s = s.replace('<', '&lt;').replace('>', '&gt;')
+    s = s.replace('<', '').replace('>', '')
     s = re.sub(r'[\[\]\{\}]', '', s)
     return s.strip()
 
@@ -117,27 +117,37 @@ def render_mermaid(graph_data):
     with st.expander("🐛 Debug: Lihat Kode Mermaid Mentah"):
         st.code(mermaid_code, language="text")
 
-    # Render HTML menggunakan eksekusi eksplisit mermaid.run()
+    # Serialisasi aman string ke JS
+    json_mermaid = json.dumps(mermaid_code)
+
     html_content = f"""
-    <div style="background-color: #0E1117; padding: 15px; border-radius: 8px;">
-        <pre class="mermaid" id="mermaid-graph">
-{mermaid_code}
-        </pre>
+    <div id="mermaid-container" style="background-color: #0E1117; padding: 15px; border-radius: 8px; min-height: 250px;">
+        <div id="graph-target"></div>
+        <div id="error-target" style="color: #ff4b4b; font-family: monospace; white-space: pre-wrap;"></div>
     </div>
     <script type="module">
         import mermaid from '[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs)';
+
+        const rawCode = {json_mermaid};
+        const target = document.getElementById('graph-target');
+        const errTarget = document.getElementById('error-target');
+
         mermaid.initialize({{ startOnLoad: false, theme: 'dark' }});
-        try {{
-            await mermaid.run({{
-                nodes: [document.getElementById('mermaid-graph')]
-            }});
-        }} catch (err) {{
-            console.error("Mermaid Render Error:", err);
+
+        async function drawGraph() {{
+            try {{
+                const {{ svg }} = await mermaid.render('mermaid_render_svg', rawCode);
+                target.innerHTML = svg;
+            }} catch (err) {{
+                console.error("Mermaid Render Error:", err);
+                errTarget.innerText = "❌ Gagal merender grafik Mermaid:\\n" + err.message;
+            }}
         }}
+
+        drawGraph();
     </script>
     """
     components.html(html_content, height=550, scrolling=True)
-
 # ---------------------------------------------------------
 # SIDEBAR: Pengiriman Log Baru & Konfigurasi
 # ---------------------------------------------------------
