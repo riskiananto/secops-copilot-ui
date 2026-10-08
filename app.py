@@ -21,7 +21,7 @@ if "selected_incident_id" not in st.session_state:
     st.session_state["selected_incident_id"] = None
 
 def clean_label_text(text: str) -> str:
-    """Membersihkan teks label agar 100% aman disisipkan ke sintaks Mermaid."""
+    """Membersihkan teks label agar aman disisipkan ke sintaks Mermaid."""
     if not text:
         return ""
     s = str(text)
@@ -78,7 +78,7 @@ def render_mermaid(graph_data):
             mermaid_lines.append(f'    {clean_id}["{label}"]')
             mermaid_lines.append(f'    style {clean_id} fill:{color},stroke:#333,stroke-width:2px,color:#fff')
 
-        # 2. Pemetaan Edges dengan Format Valid Mermaid v10: A -->|"label"| B
+        # 2. Pemetaan Edges dengan Handling Missing Nodes
         for edge in edges:
             if not isinstance(edge, dict):
                 continue
@@ -90,15 +90,13 @@ def render_mermaid(graph_data):
             if not raw_from or not raw_to:
                 continue
 
-            if raw_from not in id_map:
-                new_id = f"N{len(id_map)}"
-                id_map[raw_from] = new_id
-                mermaid_lines.append(f'    {new_id}["{clean_label_text(raw_from)}"]')
-
-            if raw_to not in id_map:
-                new_id = f"N{len(id_map)}"
-                id_map[raw_to] = new_id
-                mermaid_lines.append(f'    {new_id}["{clean_label_text(raw_to)}"]')
+            # Fallback jika node asal/tujuan belum terdaftar di array nodes
+            for raw_node in [raw_from, raw_to]:
+                if raw_node not in id_map:
+                    new_id = f"N{len(id_map)}"
+                    id_map[raw_node] = new_id
+                    mermaid_lines.append(f'    {new_id}["{clean_label_text(raw_node)}"]')
+                    mermaid_lines.append(f'    style {new_id} fill:#1E88E5,stroke:#333,stroke-width:2px,color:#fff')
 
             from_id = id_map[raw_from]
             to_id = id_map[raw_to]
@@ -113,11 +111,10 @@ def render_mermaid(graph_data):
         st.error("Format data grafik tidak dikenali.")
         return
 
-    # Panel Debug untuk verifikasi sintaks
+    # Panel Debug
     with st.expander("🐛 Debug: Lihat Kode Mermaid Mentah"):
         st.code(mermaid_code, language="text")
 
-    # Serialisasi aman string ke JS
     json_mermaid = json.dumps(mermaid_code)
 
     html_content = f"""
@@ -148,8 +145,9 @@ def render_mermaid(graph_data):
     </script>
     """
     components.html(html_content, height=550, scrolling=True)
+
 # ---------------------------------------------------------
-# SIDEBAR: Pengiriman Log Baru & Konfigurasi
+# SIDEBAR: Ingestion & Config
 # ---------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Ingestion & Config")
@@ -177,21 +175,27 @@ with st.sidebar:
                         timeout=180
                     )
                     if response.status_code == 200:
-                        analysis_result = response.json()
+                        raw_response = response.json()
                         
-                        # Generate ID & Timestamp untuk DB In-Memory
-                        inc_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                        inc_entry = {
-                            "id": inc_id,
-                            "timestamp": datetime.datetime.now(),
-                            "file_name": uploaded_file.name,
-                            "severity": analysis_result.get("summary", {}).get("severity", "MEDIUM").upper(),
-                            "patient_zero": analysis_result.get("summary", {}).get("patient_zero", "Unknown"),
-                            "affected_count": analysis_result.get("summary", {}).get("affected_hosts_count", 0),
-                            "details": analysis_result
-                        }
-                        st.session_state["incidents_db"].insert(0, inc_entry)
-                        st.success(f"Insiden {inc_id} berhasil didaftarkan!")
+                        # Normalisasi jika respon berupa list dari n8n
+                        items_to_process = raw_response if isinstance(raw_response, list) else [raw_response]
+                        
+                        for analysis_result in items_to_process:
+                            summary = analysis_result.get("summary", {}) if isinstance(analysis_result, dict) else {}
+                            
+                            inc_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                            inc_entry = {
+                                "id": inc_id,
+                                "timestamp": datetime.datetime.now(),
+                                "file_name": uploaded_file.name,
+                                "severity": str(summary.get("severity", "MEDIUM")).upper(),
+                                "patient_zero": summary.get("patient_zero", "Unknown"),
+                                "affected_count": summary.get("affected_hosts_count", 0),
+                                "details": analysis_result
+                            }
+                            st.session_state["incidents_db"].insert(0, inc_entry)
+                        
+                        st.success(f"Berhasil mendaftarkan {len(items_to_process)} insiden!")
                     else:
                         st.error(f"HTTP Error {response.status_code}: {response.text}")
                 except Exception as e:
@@ -204,7 +208,6 @@ st.title("🛡️ SecOps AI Monitoring & Incident Response")
 
 # JIKA MODE DRILL-DOWN AKTIF
 if st.session_state["selected_incident_id"] is not None:
-    # Cari insiden berdasarkan ID
     selected_inc = next((item for item in st.session_state["incidents_db"] if item["id"] == st.session_state["selected_incident_id"]), None)
     
     if selected_inc:
@@ -226,7 +229,7 @@ if st.session_state["selected_incident_id"] is not None:
             "🛡️ Mitigasi & Deteksi"
         ])
         
-        summary = data.get("summary", {})
+        summary = data.get("summary", {}) if isinstance(data, dict) else {}
         with tab_summary:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Patient Zero", summary.get("patient_zero", "N/A"))
@@ -241,29 +244,29 @@ if st.session_state["selected_incident_id"] is not None:
             
         with tab_graph:
             st.markdown("### Rekonstruksi Skema Serangan")
-            graph_data = data.get("graph", {})
-            if graph_data.get("nodes"):
+            graph_data = data.get("graph", {}) if isinstance(data, dict) else {}
+            if graph_data.get("nodes") or isinstance(graph_data, str):
                 render_mermaid(graph_data)
             else:
                 st.warning("Data grafik tidak tersedia.")
                 
         with tab_timeline:
             st.markdown("### Kronologi Kejadian")
-            timeline = data.get("timeline", [])
+            timeline = data.get("timeline", []) if isinstance(data, dict) else []
             if timeline:
                 st.dataframe(timeline, use_container_width=True)
             else:
                 st.info("Data timeline kosong.")
                 
         with tab_defense:
-            defense = data.get("defense", {})
+            defense = data.get("defense", {}) if isinstance(data, dict) else {}
             col_sig, col_act = st.columns(2)
             with col_sig:
                 st.markdown("### Sigma Detection Rule")
-                st.code(defense.get("sigma_rule", ""), language="yaml")
+                st.code(defense.get("sigma_rule", "# No rule generated"), language="yaml")
             with col_act:
                 st.markdown("### Atomic Remediation Script")
-                st.code(defense.get("atomic_script", ""), language="bash")
+                st.code(defense.get("atomic_script", "# No script generated"), language="bash")
 
 # ---------------------------------------------------------
 # JIKA MODE OVERVIEW DASHBOARD AKTIF
@@ -271,7 +274,6 @@ if st.session_state["selected_incident_id"] is not None:
 else:
     st.subheader("📈 Attack Overview & Monitoring Dashboard")
     
-    # --- Time Range & Severity Filter ---
     col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
     with col_f1:
         date_range = st.date_input(
@@ -292,19 +294,17 @@ else:
     for inc in st.session_state["incidents_db"]:
         inc_date = inc["timestamp"].date()
         
-        # Validasi Rentang Tanggal
         in_date_range = True
-        if isinstance(date_range, tuple) and len(date_range) == 2:
+        if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
             in_date_range = date_range[0] <= inc_date <= date_range[1]
             
-        # Validasi Severity & Keyword
         in_sev = inc["severity"] in selected_severity
-        in_search = (search_query.lower() in inc["patient_zero"].lower()) or (search_query.lower() in inc["id"].lower())
+        in_search = (search_query.lower() in str(inc["patient_zero"]).lower()) or (search_query.lower() in str(inc["id"]).lower())
         
         if in_date_range and in_sev and in_search:
             filtered_db.append(inc)
 
-    # --- Section Top Metrics ---
+    # Section Top Metrics
     m1, m2, m3, m4 = st.columns(4)
     total_incidents = len(filtered_db)
     crit_high_count = sum(1 for i in filtered_db if i["severity"] in ["CRITICAL", "HIGH"])
@@ -318,28 +318,29 @@ else:
 
     st.divider()
 
-    # --- Section Visualisasi Tren ---
+    # Section Visualisasi Tren (Fixed Pandas Resampling)
     if filtered_db:
         st.markdown("### 📊 Tren Frekuensi Serangan")
         df_chart = pd.DataFrame([
             {"Timestamp": i["timestamp"], "Severity": i["severity"], "Count": 1}
             for i in filtered_db
         ])
+        df_chart["Timestamp"] = pd.to_datetime(df_chart["Timestamp"])
         df_chart.set_index("Timestamp", inplace=True)
-        # Resample harian untuk grafik tren
+        
         trend_data = df_chart.groupby([pd.Grouper(freq="D"), "Severity"]).count().unstack(fill_value=0)
-        trend_data.columns = trend_data.columns.droplevel(0)
-        st.bar_chart(trend_data)
+        if not trend_data.empty:
+            trend_data.columns = trend_data.columns.droplevel(0)
+            st.bar_chart(trend_data)
     
     st.divider()
 
-    # --- Section Tabel Insiden & Drill-down Trigger ---
+    # Section Tabel Insiden
     st.markdown("### 📋 Daftar Insiden Terdeteksi")
     
     if not filtered_db:
         st.info("Belum ada data insiden dalam rentang waktu/filter ini. Unggah log baru via sidebar.")
     else:
-        # Menampilkan Tabel dengan Tombol Action Drill-Down
         for idx, inc in enumerate(filtered_db):
             with st.container():
                 c_id, c_time, c_pz, c_sev, c_host, c_act = st.columns([2, 2, 2, 1.5, 1.5, 2])
@@ -347,13 +348,11 @@ else:
                 c_time.write(inc["timestamp"].strftime("%Y-%m-%d %H:%M"))
                 c_pz.write(f"`{inc['patient_zero']}`")
                 
-                # Badge Severity
                 sev_color = "🔴" if inc['severity'] in ["CRITICAL", "HIGH"] else ("🟡" if inc['severity'] == "MEDIUM" else "🟢")
                 c_sev.write(f"{sev_color} {inc['severity']}")
                 
                 c_host.write(f"{inc['affected_count']} Host")
                 
-                # Button Drill-Down
                 if c_act.button("🔎 Inspect Attack Path", key=f"btn_{inc['id']}"):
                     st.session_state["selected_incident_id"] = inc["id"]
                     st.rerun()
