@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 import re
+from zoneinfo import ZoneInfo
 
 # 1. Konfigurasi Halaman
 st.set_page_config(
@@ -12,6 +13,7 @@ st.set_page_config(
     page_icon="🛡️",
     layout="wide"
 )
+JAKARTA_TZ = ZoneInfo("Asia/Jakarta")
 
 # 2. Inisialisasi Session State
 if "incidents_db" not in st.session_state:
@@ -182,11 +184,13 @@ with st.sidebar:
                         
                         for analysis_result in items_to_process:
                             summary = analysis_result.get("summary", {}) if isinstance(analysis_result, dict) else {}
-                            
-                            inc_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                            analysis_time = datetime.datetime.now(JAKARTA_TZ)
+                            inc_id = f"INC-{analysis_time.strftime('%Y%m%d-%H%M%S')}"
+                            #inc_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
                             inc_entry = {
                                 "id": inc_id,
-                                "timestamp": datetime.datetime.now(),
+                                "timestamp": analysis_time,
+                                #"timestamp": datetime.datetime.now(),
                                 "file_name": uploaded_file.name,
                                 "severity": str(summary.get("severity", "MEDIUM")).upper(),
                                 "patient_zero": summary.get("patient_zero", "Unknown"),
@@ -237,8 +241,8 @@ if st.session_state["selected_incident_id"] is not None:
             sev = str(summary.get("severity", "UNKNOWN")).upper()
             color = "🔴" if sev in ["CRITICAL", "HIGH"] else ("🟡" if sev == "MEDIUM" else "🟢")
             c3.metric("Severity", f"{color} {sev}")
-            c4.metric("Waktu Analisis", selected_inc["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
-            
+            #c4.metric("Waktu Analisis", selected_inc["timestamp"].strftime("%Y-%m-%d %H:%M:%S"))
+            c4.metric("Waktu Analisis", selected_inc["timestamp"].astimezone(JAKARTA_TZ).strftime("%Y-%m-%d %H:%M:%S UTC+7"))
             st.markdown("### Narasi Analisis")
             st.info(summary.get("narrative", "Tidak ada narasi."))
             
@@ -345,7 +349,8 @@ else:
             with st.container():
                 c_id, c_time, c_pz, c_sev, c_host, c_act = st.columns([2, 2, 2, 1.5, 1.5, 2])
                 c_id.write(f"**{inc['id']}**\n\n_{inc['file_name']}_")
-                c_time.write(inc["timestamp"].strftime("%Y-%m-%d %H:%M"))
+                #c_time.write(inc["timestamp"].strftime("%Y-%m-%d %H:%M"))
+                c_time.write(inc["timestamp"].astimezone(JAKARTA_TZ).strftime("%Y-%m-%d %H:%M UTC+7"))
                 c_pz.write(f"`{inc['patient_zero']}`")
                 
                 sev_color = "🔴" if inc['severity'] in ["CRITICAL", "HIGH"] else ("🟡" if inc['severity'] == "MEDIUM" else "🟢")
