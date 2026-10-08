@@ -30,50 +30,80 @@ def sanitize_mermaid_id(raw_id: str) -> str:
 def sanitize_mermaid_label(raw_label: str) -> str:
     if not raw_label:
         return ""
-    clean = str(raw_label).replace('"', "'").replace("\n", " ").replace("\r", "")
+    clean = str(raw_label)
+    # Hapus backslash, double quotes, dan newline yang merusak sintaks Mermaid
+    clean = clean.replace('\\', '/').replace('"', "'").replace("\n", " ").replace("\r", "")
     clean = re.sub(r'[\[\]\{\}\(\)]', '', clean)
     return clean.strip()
 
-def render_mermaid(graph_data: dict):
-    nodes = graph_data.get("nodes", [])
-    edges = graph_data.get("edges", [])
-    
-    if not nodes:
-        st.warning("Data node grafik kosong.")
+def render_mermaid(graph_data):
+    if not graph_data:
+        st.warning("Data grafik kosong.")
         return
 
-    mermaid_lines = ["graph TD"]
-    id_map = {}
-    
-    for idx, node in enumerate(nodes):
-        raw_id = str(node.get("id", f"node_{idx}"))
-        clean_id = sanitize_mermaid_id(raw_id)
-        id_map[raw_id] = clean_id
-        
-        label = sanitize_mermaid_label(node.get("label", raw_id))
-        color = str(node.get("color", "#1E88E5")).strip()
-        if not color.startswith("#"):
-            color = "#1E88E5"
-            
-        mermaid_lines.append(f'    {clean_id}["{label}"]')
-        mermaid_lines.append(f'    style {clean_id} fill:{color},stroke:#333,stroke-width:2px,color:#fff')
+    mermaid_code = ""
 
-    for edge in edges:
-        raw_from = str(edge.get("from", ""))
-        raw_to = str(edge.get("to", ""))
+    # HANDLING KASUS A: LLM mengembalikan graph sebagai String Mentah (e.g. "graph TD\n...")
+    if isinstance(graph_data, str):
+        raw_str = graph_data.strip()
+        raw_str = re.sub(r'^```(mermaid)?\s*', '', raw_str, flags=re.IGNORECASE)
+        raw_str = re.sub(r'\s*```$', '', raw_str)
         
-        from_id = id_map.get(raw_from, sanitize_mermaid_id(raw_from))
-        to_id = id_map.get(raw_to, sanitize_mermaid_id(raw_to))
-        label = sanitize_mermaid_label(edge.get("label", ""))
-        
-        if from_id and to_id and from_id != "node_unk" and to_id != "node_unk":
-            if label:
-                mermaid_lines.append(f'    {from_id} -- "{label}" --> {to_id}')
+        if not raw_str.startswith("graph "):
+            raw_str = "graph TD\n" + raw_str
+        mermaid_code = raw_str
+
+    # HANDLING KASUS B: LLM mengembalikan JSON Object (nodes & edges)
+    elif isinstance(graph_data, dict):
+        nodes = graph_data.get("nodes", [])
+        edges = graph_data.get("edges", [])
+
+        if not nodes and not edges:
+            st.warning("Data nodes dan edges pada grafik kosong.")
+            return
+
+        mermaid_lines = ["graph TD"]
+        id_map = {}
+
+        for idx, node in enumerate(nodes):
+            if isinstance(node, dict):
+                raw_id = str(node.get("id", f"node_{idx}"))
+                label = sanitize_mermaid_label(node.get("label", raw_id))
+                color = str(node.get("color", "#1E88E5")).strip()
             else:
-                mermaid_lines.append(f'    {from_id} --> {to_id}')
-                
-    mermaid_code = "\n".join(mermaid_lines)
-    
+                raw_id = str(node)
+                label = sanitize_mermaid_label(raw_id)
+                color = "#1E88E5"
+
+            clean_id = sanitize_mermaid_id(raw_id)
+            id_map[raw_id] = clean_id
+
+            if not color.startswith("#"):
+                color = "#1E88E5"
+
+            mermaid_lines.append(f'    {clean_id}["{label}"]')
+            mermaid_lines.append(f'    style {clean_id} fill:{color},stroke:#333,stroke-width:2px,color:#fff')
+
+        for edge in edges:
+            if isinstance(edge, dict):
+                raw_from = str(edge.get("from", ""))
+                raw_to = str(edge.get("to", ""))
+                label = sanitize_mermaid_label(edge.get("label", ""))
+            else:
+                continue
+
+            from_id = id_map.get(raw_from, sanitize_mermaid_id(raw_from))
+            to_id = id_map.get(raw_to, sanitize_mermaid_id(raw_to))
+
+            if from_id and to_id and from_id != "node_unk" and to_id != "node_unk":
+                if label:
+                    mermaid_lines.append(f'    {from_id} -- "{label}" --> {to_id}')
+                else:
+                    mermaid_lines.append(f'    {from_id} --> {to_id}')
+
+        mermaid_code = "\n".join(mermaid_lines)
+
+    # Render HTML Component
     html_content = f"""
     <div style="background-color: #0E1117; padding: 15px; border-radius: 8px;">
         <pre class="mermaid">
